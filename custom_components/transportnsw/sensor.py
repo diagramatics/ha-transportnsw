@@ -1,18 +1,18 @@
 """Support for Transport NSW (AU) to query next leave event."""
 from __future__ import annotations
+
 import logging
+from typing import Any, List
 
-from datetime import timedelta
-
-from TransportNSW import TransportNSW
 import voluptuous as vol
 
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
-from homeassistant.const import ATTR_MODE, CONF_API_KEY, CONF_NAME, UnitOfTime
-from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.const import CONF_NAME, UnitOfTime
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,10 +33,10 @@ ATTR_REAL_TIME_TRIP_ID = "real_time_trip_id"
 ATTR_LATITUDE = "latitude"
 ATTR_LONGITUDE = "longitude"
 
-CONF_STOP_ID = "stop_id"
-CONF_DESTINATION_STOP_ID = "destination_stop_id"
-
-DEFAULT_NAME = "Next Bus"
+# CONF_STOP_ID = "stop_id"
+# CONF_DESTINATION_STOP_ID = "destination_stop_id"
+#
+# DEFAULT_NAME = "Next Bus"
 ICONS = {
     "Train": "mdi:train",
     "Lightrail": "mdi:tram",
@@ -48,151 +48,117 @@ ICONS = {
     None: "mdi:clock",
 }
 
-SCAN_INTERVAL = timedelta(seconds=60)
+CONF_COORDINATOR = 'coordinator'
+CONF_STOP_ID = 'stop_id'
+CONF_DESTINATION_STOP_ID = 'destination_stop_id'
+CONF_NUM_TRIPS = 'num_trips'
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+CONF_ROUTE = 'route'
+CONF_ROUTE_SCHEMA = vol.Schema(
     {
+        vol.Required(CONF_NAME): cv.string,
         vol.Required(CONF_STOP_ID): cv.string,
         vol.Required(CONF_DESTINATION_STOP_ID): cv.string,
-        vol.Required(CONF_API_KEY): cv.string,
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+        vol.Optional(CONF_NUM_TRIPS, default=1): cv.positive_int,
     }
 )
 
 
 def setup_platform(
-    hass: HomeAssistant,
-    config: ConfigType,
-    add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+        hass: HomeAssistant,
+        config: ConfigType,
+        add_entities: AddEntitiesCallback,
+        discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Set up the Transport NSW sensor."""
-    stop_id = config[CONF_STOP_ID]
-    api_key = config[CONF_API_KEY]
-    destination_stop_id = config.get(CONF_DESTINATION_STOP_ID)
-    name = config.get(CONF_NAME)
+    coordinator = discovery_info[CONF_COORDINATOR]
+    route = discovery_info[CONF_ROUTE]
 
-    _LOGGER.debug("Setup %s %s %s", stop_id, name, destination_stop_id)
+    if coordinator.data is None:
+        _LOGGER.error("Initial data not available. Cannot setup sensor.")
+        return
 
-    data = PublicTransportData(stop_id, destination_stop_id, api_key)
-    add_entities([TransportNSWSensor(data, stop_id, name)], False)
+    entities = []
+    for trip_index in range(route[CONF_NUM_TRIPS]):
+        entities.append(
+            TransportNSWTripSensor(
+                coordinator, name=route[CONF_NAME], stop_id=route[CONF_STOP_ID],
+                destination_stop_id=route[CONF_DESTINATION_STOP_ID], trip_index=trip_index))
+
+    add_entities(entities)
 
 
-class TransportNSWSensor(SensorEntity):
-    """Implementation of an Transport NSW sensor."""
-
+class TransportNSWTripSensor(
+    CoordinatorEntity[DataUpdateCoordinator[List[Any]]], SensorEntity
+):
     _attr_attribution = "Data provided by Transport NSW"
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
 
-    def __init__(self, data, stop_id, name):
+    def __init__(
+            self,
+            coordinator: DataUpdateCoordinator[List[Any]],
+            name: str,
+            stop_id: str,
+            destination_stop_id: str,
+            trip_index: int,
+    ) -> None:
         """Initialize the sensor."""
-        self.data = data
+        super().__init__(coordinator)
+
         self._name = name
         self._stop_id = stop_id
-        self._times = self._state = None
-        self._icon = ICONS[None]
-        _LOGGER.debug("%s %s %s", self._name, self._stop_id, self._icon)
+        self._destination_stop_id = destination_stop_id
+        self._trip_index = trip_index
 
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+        self._attr_name = f'{name} {trip_index + 1}'
+        self._attr_unique_id = f'tnsw-{self._stop_id}-{self._destination_stop_id}-{self._trip_index}'
+
+    def _get_trip_data(self):
+        if self.coordinator.data is None:
+            return None
+
+        return self.coordinator.data[self._trip_index]
 
     @property
     def native_value(self):
         """Return the state of the sensor."""
-        return self._state
+        data = self._get_trip_data()
+        if data is None:
+            return None
+
+        return data["due"]
 
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        if self._times is not None:
-            return {
-                ATTR_DUE_IN: self._times[ATTR_DUE_IN],
-                ATTR_STOP_ID: self._stop_id,
-                ATTR_ORIGIN_NAME: self._times[ATTR_ORIGIN_NAME],
-                ATTR_DEPARTURE_TIME: self._times[ATTR_DEPARTURE_TIME],
-                ATTR_DESTINATION_STOP_ID: self._times[ATTR_DESTINATION_STOP_ID],
-                ATTR_DESTINATION_NAME: self._times[ATTR_DESTINATION_NAME],
-                ATTR_ARRIVAL_TIME: self._times[ATTR_ARRIVAL_TIME],
-                ATTR_ORIGIN_TRANSPORT_TYPE: self._times[ATTR_ORIGIN_TRANSPORT_TYPE],
-                ATTR_ORIGIN_TRANSPORT_NAME: self._times[ATTR_ORIGIN_TRANSPORT_NAME],
-                ATTR_ORIGIN_LINE_NAME: self._times[ATTR_ORIGIN_LINE_NAME],
-                ATTR_ORIGIN_LINE_NAME_SHORT: self._times[ATTR_ORIGIN_LINE_NAME_SHORT],
-                ATTR_CHANGES: self._times[ATTR_CHANGES],
-                ATTR_OCCUPANCY: self._times[ATTR_OCCUPANCY],
-                ATTR_REAL_TIME_TRIP_ID: self._times[ATTR_REAL_TIME_TRIP_ID],
-                ATTR_LATITUDE: self._times[ATTR_LATITUDE],
-                ATTR_LONGITUDE: self._times[ATTR_LONGITUDE],
-            }
+        data = self._get_trip_data()
+        if data is None:
+            return None
 
-    @property
-    def native_unit_of_measurement(self):
-        """Return the unit this state is expressed in."""
-        return UnitOfTime.MINUTES
+        return {
+            ATTR_DUE_IN: data["due"],
+            ATTR_STOP_ID: self._stop_id,
+            ATTR_ORIGIN_NAME: data["origin_name"],
+            ATTR_DEPARTURE_TIME: data["departure_time"],
+            ATTR_DESTINATION_STOP_ID: self._destination_stop_id,
+            ATTR_DESTINATION_NAME: data["destination_name"],
+            ATTR_ARRIVAL_TIME: data["arrival_time"],
+            ATTR_ORIGIN_TRANSPORT_TYPE: data["origin_transport_type"],
+            ATTR_ORIGIN_TRANSPORT_NAME: data["origin_transport_name"],
+            ATTR_ORIGIN_LINE_NAME: data["origin_line_name"],
+            ATTR_ORIGIN_LINE_NAME_SHORT: data["origin_line_name_short"],
+            ATTR_CHANGES: data["changes"],
+            ATTR_OCCUPANCY: data["occupancy"],
+            ATTR_REAL_TIME_TRIP_ID: data["real_time_trip_id"],
+            ATTR_LATITUDE: data["latitude"],
+            ATTR_LONGITUDE: data["longitude"],
+        }
 
     @property
     def icon(self):
         """Icon to use in the frontend, if any."""
-        return self._icon
+        data = self._get_trip_data()
+        if data is None:
+            return "mdi:clock"
 
-    def update(self) -> None:
-        """Get the latest data from Transport NSW and update the states."""
-        self.data.update()
-        self._times = self.data.info
-        self._state = self._times[ATTR_DUE_IN]
-        self._icon = ICONS[self._times[ATTR_ORIGIN_TRANSPORT_TYPE]]
-
-        _LOGGER.debug("Update: %s %s %s", self._icon, self._times[ATTR_DUE_IN], self._times[ATTR_DESTINATION_STOP_ID])
-
-
-class PublicTransportData:
-    """The Class for handling the data retrieval."""
-
-    def __init__(self, stop_id, destination, api_key):
-        """Initialize the data object."""
-        self._stop_id = stop_id
-        self._destination = destination
-        self._api_key = api_key
-        self.info = {
-            ATTR_DUE_IN: "n/a",
-            ATTR_STOP_ID: self._stop_id,
-            ATTR_ORIGIN_NAME: "n/a",
-            ATTR_DEPARTURE_TIME: "n/a",
-            ATTR_DESTINATION_STOP_ID: self._destination,
-            ATTR_DESTINATION_NAME: "n/a",
-            ATTR_ARRIVAL_TIME: "n/a",
-            ATTR_ORIGIN_TRANSPORT_TYPE: "n/a",
-            ATTR_ORIGIN_TRANSPORT_NAME: "n/a",
-            ATTR_ORIGIN_LINE_NAME: "n/a",
-            ATTR_ORIGIN_LINE_NAME_SHORT: "n/a",
-            ATTR_CHANGES: "n/a",
-            ATTR_OCCUPANCY: "n/a",
-            ATTR_REAL_TIME_TRIP_ID: "n/a",
-            ATTR_LATITUDE: "n/a",
-            ATTR_LONGITUDE: "n/a",
-        }
-        self.tnsw = TransportNSW()
-
-    def update(self):
-        """Get the next leave time."""
-        _data = self.tnsw.get_trip(
-            self._stop_id, self._destination, self._api_key
-        )
-        self.info = {
-            ATTR_DUE_IN: _data["due"],
-            ATTR_STOP_ID: self._stop_id,
-            ATTR_ORIGIN_NAME: _data["origin_name"],
-            ATTR_DEPARTURE_TIME: _data["departure_time"],
-            ATTR_DESTINATION_STOP_ID: self._destination,
-            ATTR_DESTINATION_NAME: _data["destination_name"],
-            ATTR_ARRIVAL_TIME: _data["arrival_time"],
-            ATTR_ORIGIN_TRANSPORT_TYPE: _data["origin_transport_type"],
-            ATTR_ORIGIN_TRANSPORT_NAME: _data["origin_transport_name"],
-            ATTR_ORIGIN_LINE_NAME: _data["origin_line_name"],
-            ATTR_ORIGIN_LINE_NAME_SHORT: _data["origin_line_name_short"],
-            ATTR_CHANGES: _data["changes"],
-            ATTR_OCCUPANCY: _data["occupancy"],
-            ATTR_REAL_TIME_TRIP_ID: _data["real_time_trip_id"],
-            ATTR_LATITUDE: _data["latitude"],
-            ATTR_LONGITUDE: _data["longitude"],
-        }
+        return ICONS[data[ATTR_ORIGIN_TRANSPORT_TYPE]]
