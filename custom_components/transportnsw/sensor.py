@@ -12,7 +12,10 @@ from homeassistant.const import CONF_NAME, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
-from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,12 +51,12 @@ ICONS = {
     None: "mdi:clock",
 }
 
-CONF_COORDINATOR = 'coordinator'
-CONF_STOP_ID = 'stop_id'
-CONF_DESTINATION_STOP_ID = 'destination_stop_id'
-CONF_NUM_TRIPS = 'num_trips'
+CONF_COORDINATOR = "coordinator"
+CONF_STOP_ID = "stop_id"
+CONF_DESTINATION_STOP_ID = "destination_stop_id"
+CONF_NUM_TRIPS = "num_trips"
 
-CONF_ROUTE = 'route'
+CONF_ROUTE = "route"
 CONF_ROUTE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_NAME): cv.string,
@@ -65,10 +68,10 @@ CONF_ROUTE_SCHEMA = vol.Schema(
 
 
 def setup_platform(
-        hass: HomeAssistant,
-        config: ConfigType,
-        add_entities: AddEntitiesCallback,
-        discovery_info: DiscoveryInfoType | None = None,
+    hass: HomeAssistant,
+    config: ConfigType,
+    add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Set up the Transport NSW sensor."""
     coordinator = discovery_info[CONF_COORDINATOR]
@@ -82,8 +85,13 @@ def setup_platform(
     for trip_index in range(route[CONF_NUM_TRIPS]):
         entities.append(
             TransportNSWTripSensor(
-                coordinator, name=route[CONF_NAME], stop_id=route[CONF_STOP_ID],
-                destination_stop_id=route[CONF_DESTINATION_STOP_ID], trip_index=trip_index))
+                coordinator,
+                name=route[CONF_NAME],
+                stop_id=route[CONF_STOP_ID],
+                destination_stop_id=route[CONF_DESTINATION_STOP_ID],
+                trip_index=trip_index,
+            )
+        )
 
     add_entities(entities)
 
@@ -95,12 +103,12 @@ class TransportNSWTripSensor(
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
 
     def __init__(
-            self,
-            coordinator: DataUpdateCoordinator[List[Any]],
-            name: str,
-            stop_id: str,
-            destination_stop_id: str,
-            trip_index: int,
+        self,
+        coordinator: DataUpdateCoordinator[List[Any]],
+        name: str,
+        stop_id: str,
+        destination_stop_id: str,
+        trip_index: int,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
@@ -110,8 +118,10 @@ class TransportNSWTripSensor(
         self._destination_stop_id = destination_stop_id
         self._trip_index = trip_index
 
-        self._attr_name = f'{name} {trip_index + 1}'
-        self._attr_unique_id = f'tnsw-{self._stop_id}-{self._destination_stop_id}-{self._trip_index}'
+        self._attr_name = f"{name} {trip_index + 1}"
+        self._attr_unique_id = (
+            f"tnsw-{self._stop_id}-{self._destination_stop_id}-{self._trip_index}"
+        )
 
     def _get_trip_data(self):
         if self.coordinator.data is None:
